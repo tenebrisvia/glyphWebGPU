@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GlyphWebGPU - Basic 2D p5.js Example</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            background-color: #000000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            touch-action: none;
+        }
+        #sourceCanvas {
+            display: none;
+        }
+    </style>
+    <script src="./p5.min.js"></script>
+    <script src="./glyphWebGPU.js"></script>
+</head>
+<body>
+    <canvas id="sourceCanvas"></canvas>
+    <canvas id="asciiCanvas"></canvas>
+    <script>
+        "use strict";
+
+        // 1. Grid Configuration
+        const charWidth = 8;
+        const charHeight = 8;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+        let cols = Math.floor(window.innerWidth * dpr / charWidth);
+        let rows = Math.floor(window.innerHeight * dpr / charHeight);
+
+        const sourceCanvas = document.getElementById('sourceCanvas');
+        const asciiCanvas = document.getElementById('asciiCanvas');
+
+        asciiCanvas.width = cols * charWidth;
+        asciiCanvas.height = rows * charHeight;
+        asciiCanvas.style.width = '100vw';
+        asciiCanvas.style.height = '100vh';
+
+        let glyphRenderer = null;
+
+        // 2. p5.js Setup Callback
+        async function setup() {
+            // Force 1:1 pixel density on source canvas (1 pixel per ASCII grid cell)
+            pixelDensity(1);
+            createCanvas(cols, rows, P2D, sourceCanvas);
+
+            // Instantiate GlyphWebGPU engine
+            glyphRenderer = new GlyphWebGPU(sourceCanvas, asciiCanvas, cols, rows, 0);
+
+            // Define ASCII Character Map (256 entries mapping luminance 0..255 to character codes)
+            const charMap = new Float32Array(256);
+            const ramp = [32, 46, 58, 45, 61, 43, 42, 35, 37, 64];
+            for (let i = 0; i < 256; i++) {
+                const rampIdx = Math.floor((i / 256) * ramp.length);
+                charMap[i] = ramp[rampIdx];
+            }
+
+            // Define Foreground & Background Color Palettes (Interleaved RGBA float arrays 0..1)
+            const fgColors = new Float32Array(256 * 4);
+            const bgColors = new Float32Array(256 * 4);
+
+            for (let i = 0; i < 256; i++) {
+                const t = i / 255.0;
+                // Generative Cyan -> Magenta -> Gold Gradient
+                fgColors[i * 4 + 0] = Math.sin(t * Math.PI) * 0.9 + 0.1; // R
+                fgColors[i * 4 + 1] = (1.0 - t) * 0.8 + 0.2;            // G
+                fgColors[i * 4 + 2] = t * 0.9 + 0.1;                    // B
+                fgColors[i * 4 + 3] = 1.0;                              // A
+
+                // Dark Navy Background
+                bgColors[i * 4 + 0] = 0.02;
+                bgColors[i * 4 + 1] = 0.02;
+                bgColors[i * 4 + 2] = 0.05;
+                bgColors[i * 4 + 3] = 1.0;
+            }
+
+            // Upload Palettes to WebGPU Storage Buffers
+            glyphRenderer.setPalettes(charMap, fgColors, bgColors);
+
+            // Load Font Atlas PNG
+            await glyphRenderer.loadGlyphsURL(
+                './Amstrad_CPC_Full_AMSDOS_Character_Set.png',
+                128, 128, // Atlas width & height
+                8, 8      // Glyph width & height
+            );
+        }
+
+        // 3. p5.js 2D Render Loop
+        function draw() {
+            // Draw animated 2D generative graphics on offscreen source canvas
+            background(0);
+
+            const t = millis() * 0.0012;
+            const centerX = cols / 2;
+            const centerY = rows / 2;
+            const maxRadius = Math.min(cols, rows) * 0.35;
+
+            noStroke();
+
+            // Render orbiting morphing 2D circles
+            for (let i = 0; i < 6; i++) {
+                const angle = t * 1.2 + (i * Math.PI / 3);
+                const distance = Math.sin(t * 0.8 + i) * (maxRadius * 0.8);
+                const x = centerX + Math.cos(angle) * distance;
+                const y = centerY + Math.sin(angle) * distance;
+                const radius = 8 + Math.sin(t * 2 + i) * 8;
+
+                // Brightness gradient fills
+                fill(220 + i * 5);
+                ellipse(x, y, radius * 2, radius * 2);
+            }
+
+            // 4. Render WebGPU ASCII Frame
+            if (glyphRenderer) {
+                glyphRenderer.draw();
+            }
+        }
+
+        // 4. Window Resize Handler
+        function windowResized() {
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            cols = Math.floor(window.innerWidth * dpr / charWidth);
+            rows = Math.floor(window.innerHeight * dpr / charHeight);
+
+            asciiCanvas.width = cols * charWidth;
+            asciiCanvas.height = rows * charHeight;
+            asciiCanvas.style.width = '100vw';
+            asciiCanvas.style.height = '100vh';
+
+            resizeCanvas(cols, rows);
+            if (glyphRenderer) {
+                glyphRenderer.resize(cols, rows);
+            }
+        }
+    </script>
+</body>
+</html>
