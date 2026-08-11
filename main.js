@@ -41,8 +41,8 @@ const asciiCanvas = document.getElementById('asciiCanvas');
 const dpr = Math.min(window.devicePixelRatio || 1, 2);
 asciiCanvas.width = ~~(window.innerWidth * dpr / settings.charWidth) * settings.charWidth;
 asciiCanvas.height = ~~(window.innerHeight * dpr / settings.charHeight) * settings.charHeight;
-asciiCanvas.style.width = '100vw';
-asciiCanvas.style.height = '100vh';
+asciiCanvas.style.width = `${asciiCanvas.width / dpr}px`;
+asciiCanvas.style.height = `${asciiCanvas.height / dpr}px`;
 
 // ASCII Grid Dimensions (Columns & Rows)
 let _dimX = ~~(asciiCanvas.width / settings.charWidth * ZOOM);
@@ -429,8 +429,8 @@ function windowResized() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     asciiCanvas.width = ~~(window.innerWidth * dpr / settings.charWidth) * settings.charWidth;
     asciiCanvas.height = ~~(window.innerHeight * dpr / settings.charHeight) * settings.charHeight;
-    asciiCanvas.style.width = '100vw';
-    asciiCanvas.style.height = '100vh';
+    asciiCanvas.style.width = `${asciiCanvas.width / dpr}px`;
+    asciiCanvas.style.height = `${asciiCanvas.height / dpr}px`;
 
     _dimX = ~~(asciiCanvas.width / settings.charWidth * ZOOM);
     _dimY = ~~(asciiCanvas.height / settings.charHeight * ZOOM);
