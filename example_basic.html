@@ -37,20 +37,22 @@
         "use strict";
 
         // 1. Grid Configuration
-        const charWidth = 8;
-        const charHeight = 8;
+        const glyphWidth = 8, glyphHeight = 8;
+        const zoom = 2; // 2x zoom -> 8x8 glyph renders as 16x16
+        const cellWidth = glyphWidth * zoom;
+        const cellHeight = glyphHeight * zoom;
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-        let cols = Math.floor(window.innerWidth * dpr / charWidth);
-        let rows = Math.floor(window.innerHeight * dpr / charHeight);
+        let cols = Math.floor(window.innerWidth * dpr / cellWidth);
+        let rows = Math.floor(window.innerHeight * dpr / cellHeight);
 
         const sourceCanvas = document.getElementById('sourceCanvas');
         const asciiCanvas = document.getElementById('asciiCanvas');
 
-        asciiCanvas.width = cols * charWidth;
-        asciiCanvas.height = rows * charHeight;
-        asciiCanvas.style.width = '100vw';
-        asciiCanvas.style.height = '100vh';
+        asciiCanvas.width = cols * glyphWidth;
+        asciiCanvas.height = rows * glyphHeight;
+        asciiCanvas.style.width = `${(cols * cellWidth) / dpr}px`;
+        asciiCanvas.style.height = `${(rows * cellHeight) / dpr}px`;
 
         let glyphRenderer = null;
 
@@ -135,13 +137,13 @@
         // 4. Window Resize Handler
         function windowResized() {
             const dpr = Math.min(window.devicePixelRatio || 1, 2);
-            cols = Math.floor(window.innerWidth * dpr / charWidth);
-            rows = Math.floor(window.innerHeight * dpr / charHeight);
+            cols = Math.floor(window.innerWidth * dpr / cellWidth);
+            rows = Math.floor(window.innerHeight * dpr / cellHeight);
 
-            asciiCanvas.width = cols * charWidth;
-            asciiCanvas.height = rows * charHeight;
-            asciiCanvas.style.width = '100vw';
-            asciiCanvas.style.height = '100vh';
+            asciiCanvas.width = cols * glyphWidth;
+            asciiCanvas.height = rows * glyphHeight;
+            asciiCanvas.style.width = `${(cols * cellWidth) / dpr}px`;
+            asciiCanvas.style.height = `${(rows * cellHeight) / dpr}px`;
 
             resizeCanvas(cols, rows);
             if (glyphRenderer) {

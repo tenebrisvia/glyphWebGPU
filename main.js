@@ -19,7 +19,8 @@ function gteat(min, max) {
 
 // Application Configuration & State Constants
 const p5Canvas = document.getElementById('p5Canvas');
-const ZOOM = 1.0;
+const asciiCanvas = document.getElementById('asciiCanvas');
+const ZOOM = 2.0; // 2x zoom -> 8x8 glyph renders as 16x16
 const settings = {
     stroke_width: 32,
     noise_incr: 0.001,
@@ -35,18 +36,20 @@ const settings = {
     charWidth: 8,
     charHeight: 8
 };
-const asciiCanvas = document.getElementById('asciiCanvas');
+const cellWidth = settings.charWidth * ZOOM;
+const cellHeight = settings.charHeight * ZOOM;
 
 // High-DPI / Retina Screen Scaling (capped at 2x)
 const dpr = Math.min(window.devicePixelRatio || 1, 2);
-asciiCanvas.width = ~~(window.innerWidth * dpr / settings.charWidth) * settings.charWidth;
-asciiCanvas.height = ~~(window.innerHeight * dpr / settings.charHeight) * settings.charHeight;
-asciiCanvas.style.width = `${asciiCanvas.width / dpr}px`;
-asciiCanvas.style.height = `${asciiCanvas.height / dpr}px`;
 
 // ASCII Grid Dimensions (Columns & Rows)
-let _dimX = ~~(asciiCanvas.width / settings.charWidth * ZOOM);
-let _dimY = ~~(asciiCanvas.height / settings.charHeight * ZOOM);
+let _dimX = Math.floor(window.innerWidth * dpr / cellWidth);
+let _dimY = Math.floor(window.innerHeight * dpr / cellHeight);
+
+asciiCanvas.width = _dimX * settings.charWidth;
+asciiCanvas.height = _dimY * settings.charHeight;
+asciiCanvas.style.width = `${(_dimX * cellWidth) / dpr}px`;
+asciiCanvas.style.height = `${(_dimY * cellHeight) / dpr}px`;
 
 // Color Palettes & Engine Handles
 let f_R, f_G, f_B;
@@ -427,13 +430,16 @@ function draw() {
  */
 function windowResized() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    asciiCanvas.width = ~~(window.innerWidth * dpr / settings.charWidth) * settings.charWidth;
-    asciiCanvas.height = ~~(window.innerHeight * dpr / settings.charHeight) * settings.charHeight;
-    asciiCanvas.style.width = `${asciiCanvas.width / dpr}px`;
-    asciiCanvas.style.height = `${asciiCanvas.height / dpr}px`;
+    const cellWidth = settings.charWidth * ZOOM;
+    const cellHeight = settings.charHeight * ZOOM;
 
-    _dimX = ~~(asciiCanvas.width / settings.charWidth * ZOOM);
-    _dimY = ~~(asciiCanvas.height / settings.charHeight * ZOOM);
+    _dimX = Math.floor(window.innerWidth * dpr / cellWidth);
+    _dimY = Math.floor(window.innerHeight * dpr / cellHeight);
+
+    asciiCanvas.width = _dimX * settings.charWidth;
+    asciiCanvas.height = _dimY * settings.charHeight;
+    asciiCanvas.style.width = `${(_dimX * cellWidth) / dpr}px`;
+    asciiCanvas.style.height = `${(_dimY * cellHeight) / dpr}px`;
 
     resizeCanvas(_dimX, _dimY);
     if (glyphWebGPU) {
