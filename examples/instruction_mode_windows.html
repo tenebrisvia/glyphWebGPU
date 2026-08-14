@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instruction mode example - Vibe coded windows</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            background-color: #020603;
+            color: #33ff33;
+            font-family: monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            touch-action: none;
+            box-shadow: 0 0 40px rgba(20, 180, 40, 0.25), inset 0 0 60px rgba(0, 0, 0, 0.8);
+            border: 2px solid #0f3d14;
+            border-radius: 4px;
+        }
+    </style>
+    <script src="../glyphWebGPU.js"></script>
+</head>
+<body>
+    <canvas id="asciiCanvas"></canvas>
+
+    <script>
+        "use strict";
+
+        // 1. Grid Configuration (Zoom = 1 for high-density terminal layout)
+        const glyphWidth = 12, glyphHeight = 24;
+        const zoom = 1.0; // 1x zoom -> 1:1 pixel crisp text
+        const cellWidth = glyphWidth * zoom;
+        const cellHeight = glyphHeight * zoom;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+        let cols = Math.floor(window.innerWidth * dpr / cellWidth);
+        let rows = Math.floor(window.innerHeight * dpr / cellHeight);
+
+        const asciiCanvas = document.getElementById('asciiCanvas');
+        asciiCanvas.width = cols * glyphWidth;
+        asciiCanvas.height = rows * glyphHeight;
+        asciiCanvas.style.width = `${(cols * cellWidth) / dpr}px`;
+        asciiCanvas.style.height = `${(rows * cellHeight) / dpr}px`;
+
+        let renderer = null;
+
+        // 2. Phosphor Green CRT Palette (Pre-packed uint32 RGBA8)
+        const C_DESKTOP_BG   = GlyphWebGPU.packColor(0.006, 0.02, 0.008);
+        const C_DESKTOP_DOT  = GlyphWebGPU.packColor(0.025, 0.09, 0.035);
+        const C_HEADER_BG    = GlyphWebGPU.packColor(0.04, 0.22, 0.06);
+        const C_HEADER_FG    = GlyphWebGPU.packColor(0.85, 1.0, 0.85);
+        const C_STATUS_BG    = GlyphWebGPU.packColor(0.02, 0.10, 0.03);
+        const C_STATUS_FG    = GlyphWebGPU.packColor(0.4, 0.9, 0.4);
+
+        // Window Frame Colors
+        const C_WIN_BG       = GlyphWebGPU.packColor(0.012, 0.04, 0.016);
+        const C_WIN_BORDER_A = GlyphWebGPU.packColor(0.35, 1.0, 0.4);   // Active window border
+        const C_WIN_BORDER_I = GlyphWebGPU.packColor(0.12, 0.4, 0.15);  // Inactive window border
+        const C_TITLE_BG_A   = GlyphWebGPU.packColor(0.15, 0.65, 0.22); // Active titlebar bg
+        const C_TITLE_BG_I   = GlyphWebGPU.packColor(0.04, 0.18, 0.06); // Inactive titlebar bg
+        const C_TITLE_FG_A   = GlyphWebGPU.packColor(0.95, 1.0, 0.95);
+        const C_TITLE_FG_I   = GlyphWebGPU.packColor(0.3, 0.65, 0.35);
+
+        // Content Text Colors
+        const C_TEXT_GLOW    = GlyphWebGPU.packColor(0.8, 1.0, 0.8);
+        const C_TEXT_BRIGHT  = GlyphWebGPU.packColor(0.45, 1.0, 0.45);
+        const C_TEXT_MID     = GlyphWebGPU.packColor(0.25, 0.75, 0.3);
+        const C_TEXT_DIM     = GlyphWebGPU.packColor(0.12, 0.42, 0.16);
+        const C_AMBER        = GlyphWebGPU.packColor(1.0, 0.75, 0.15);
+        const C_CYAN         = GlyphWebGPU.packColor(0.3, 0.95, 0.85);
+        const C_RED          = GlyphWebGPU.packColor(1.0, 0.3, 0.3);
+
+        // 3. Complete CP437 to Unicode Mapping & Reverse Translator
+        const CP437_UNICODE = [
+            '\u0000', '\u263A', '\u263B', '\u2665', '\u2666', '\u2663', '\u2660', '\u2022',
+            '\u25D8', '\u25CB', '\u25D9', '\u2642', '\u2640', '\u266A', '\u266B', '\u263C',
+            '\u25BA', '\u25C4', '\u2195', '\u203C', '\u00B6', '\u00A7', '\u25AC', '\u21A8',
+            '\u2191', '\u2193', '\u2192', '\u2190', '\u221F', '\u2194', '\u25B2', '\u25BC',
+            ' ', '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/',
+            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<', '=', '>', '?',
+            '@', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O',
+            'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '[', '\\', ']', '^', '_',
+            '`', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o',
+            'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '|', '}', '~', '\u2302',
+            '\u00C7', '\u00FC', '\u00E9', '\u00E2', '\u00E4', '\u00E0', '\u00E5', '\u00E7',
+            '\u00EA', '\u00EB', '\u00E8', '\u00EF', '\u00EE', '\u00EC', '\u00C4', '\u00C5',
+            '\u00C9', '\u00E6', '\u00C6', '\u00F4', '\u00F6', '\u00F2', '\u00FB', '\u00F9',
+            '\u00FF', '\u00D6', '\u00DC', '\u00A2', '\u00A3', '\u00A5', '\u20A7', '\u0192',
+            '\u00E1', '\u00ED', '\u00F3', '\u00FA', '\u00F1', '\u00D1', '\u00AA', '\u00BA',
+            '\u00BF', '\u2310', '\u00AC', '\u00BD', '\u00BC', '\u00A1', '\u00AB', '\u00BB',
+            '\u2591', '\u2592', '\u2593', '\u2502', '\u2524', '\u2561', '\u2562', '\u2556',
+            '\u2555', '\u2563', '\u2551', '\u2557', '\u255D', '\u255C', '\u255B', '\u2510',
+            '\u2514', '\u2534', '\u252C', '\u251C', '\u2500', '\u253C', '\u255E', '\u255F',
+            '\u255A', '\u2554', '\u2569', '\u2566', '\u2560', '\u2550', '\u256C', '\u2567',
+            '\u2568', '\u2564', '\u2565', '\u2559', '\u2558', '\u2552', '\u2553', '\u256B',
+            '\u256A', '\u2518', '\u250C', '\u2588', '\u2584', '\u258C', '\u2590', '\u2580',
+            '\u03B1', '\u00DF', '\u0393', '\u03C0', '\u03A3', '\u03C3', '\u03BC', '\u03C4',
+            '\u03A6', '\u0398', '\u03A9', '\u03B4', '\u221E', '\u03C6', '\u03B5', '\u2229',
+            '\u2261', '\u00B1', '\u2265', '\u2264', '\u2320', '\u2321', '\u00F7', '\u2248',
+            '\u00B0', '\u2219', '\u00B7', '\u221A', '\u207F', '\u00B2', '\u25A0', '\u00A0'
+        ];
+
+        const UNICODE_TO_CP437 = new Map();
+        for (let i = 0; i < 256; i++) {
+            UNICODE_TO_CP437.set(CP437_UNICODE[i].charCodeAt(0), i);
+        }
+        for (let i = 0; i < 128; i++) {
+            if (!UNICODE_TO_CP437.has(i)) UNICODE_TO_CP437.set(i, i);
+        }
+
+        // 4. String & Shape Drawing Helpers (Transparent Unicode to CP437 Mapping)
+        function drawString(instructions, x, y, str, fg, bg) {
+            for (let i = 0; i < str.length; i++) {
+                const uCode = str.charCodeAt(i);
+                const charCode = UNICODE_TO_CP437.get(uCode) ?? (uCode < 256 ? uCode : 32);
+                instructions.push({
+                    x: x + i,
+                    y: y,
+                    charCode: charCode,
+                    fg: fg,
+                    bg: bg
+                });
+            }
+        }
+
+        function fillRect(instructions, startX, startY, width, height, charCode, fg, bg) {
+            let code = charCode;
+            if (typeof charCode === 'string') {
+                const uCode = charCode.charCodeAt(0);
+                code = UNICODE_TO_CP437.get(uCode) ?? (uCode < 256 ? uCode : 32);
+            }
+            for (let y = startY; y < startY + height; y++) {
+                for (let x = startX; x < startX + width; x++) {
+                    instructions.push({
+                        x: x,
+                        y: y,
+                        charCode: code,
+                        fg: fg,
+                        bg: bg
+                    });
+                }
+            }
+        }
+
+        // 5. Window System Class with Authentic CP437 Box-Drawing
+        class TerminalWindow {
+            constructor(id, title, x, y, w, h, renderFn) {
+                this.id = id;
+                this.title = title;
+                this.x = x;
+                this.y = y;
+                this.w = w;
+                this.h = h;
+                this.renderFn = renderFn;
+                this.isDragging = false;
+                this.dragOffsetX = 0;
+                this.dragOffsetY = 0;
+            }
+
+            contains(cellX, cellY) {
+                return cellX >= this.x && cellX < this.x + this.w &&
+                       cellY >= this.y && cellY < this.y + this.h;
+            }
+
+            isTitleBar(cellX, cellY) {
+                return cellX >= this.x && cellX < this.x + this.w &&
+                       (cellY === this.y || cellY === this.y + 1);
+            }
+
+            render(instructions, isActive, frameCount) {
+                const borderColor = isActive ? C_WIN_BORDER_A : C_WIN_BORDER_I;
+                const titleBg = isActive ? C_TITLE_BG_A : C_TITLE_BG_I;
+                const titleFg = isActive ? C_TITLE_FG_A : C_TITLE_FG_I;
+
+                // Window Body Background
+                fillRect(instructions, this.x + 1, this.y + 2, this.w - 2, this.h - 3, 32, C_TEXT_DIM, C_WIN_BG);
+
+                // Window Title Bar (Row 0)
+                fillRect(instructions, this.x, this.y, this.w, 1, 32, titleFg, titleBg);
+                const titleStr = ` ≡ ${this.title} ≡ `;
+                drawString(instructions, this.x + 1, this.y, titleStr, titleFg, titleBg);
+                drawString(instructions, this.x + this.w - 4, this.y, '[■]', titleFg, titleBg);
+
+                // Authentic CP437 Box-Drawing Borders:
+                // Active Windows: Double-line borders (═, ║, ╔, ╗, ╚, ╝)
+                // Inactive Windows: Single-line borders (─, │, ┌, ┐, └, ┘)
+                const cHoriz = isActive ? 205 /* ═ */ : 196 /* ─ */;
+                const cVert  = isActive ? 186 /* ║ */ : 179 /* │ */;
+                const cTopL  = isActive ? 201 /* ╔ */ : 218 /* ┌ */;
+                const cTopR  = isActive ? 187 /* ╗ */ : 191 /* ┐ */;
+                const cBotL  = isActive ? 200 /* ╚ */ : 192 /* └ */;
+                const cBotR  = isActive ? 188 /* ╝ */ : 217 /* ┘ */;
+
+                // Horizontal top & bottom frame
+                for (let x = this.x + 1; x < this.x + this.w - 1; x++) {
+                    instructions.push({ x: x, y: this.y + 1, charCode: cHoriz, fg: borderColor, bg: C_WIN_BG });
+                    instructions.push({ x: x, y: this.y + this.h - 1, charCode: cHoriz, fg: borderColor, bg: C_WIN_BG });
+                }
+
+                // Vertical left & right frame
+                for (let y = this.y + 2; y < this.y + this.h - 1; y++) {
+                    instructions.push({ x: this.x, y: y, charCode: cVert, fg: borderColor, bg: C_WIN_BG });
+                    instructions.push({ x: this.x + this.w - 1, y: y, charCode: cVert, fg: borderColor, bg: C_WIN_BG });
+                }
+
+                // 4 Clean Corner Connectors
+                instructions.push({ x: this.x, y: this.y + 1, charCode: cTopL, fg: borderColor, bg: C_WIN_BG });
+                instructions.push({ x: this.x + this.w - 1, y: this.y + 1, charCode: cTopR, fg: borderColor, bg: C_WIN_BG });
+                instructions.push({ x: this.x, y: this.y + this.h - 1, charCode: cBotL, fg: borderColor, bg: C_WIN_BG });
+                instructions.push({ x: this.x + this.w - 1, y: this.y + this.h - 1, charCode: cBotR, fg: borderColor, bg: C_WIN_BG });
+
+                // Render Inner Content
+                if (this.renderFn) {
+                    this.renderFn(instructions, this.x + 2, this.y + 2, this.w - 4, this.h - 3, isActive, frameCount);
+                }
+            }
+        }
+
+        // 5. Starfield 3D Simulation Setup
+        const numStars = 60;
+        const stars = [];
+        for (let i = 0; i < numStars; i++) {
+            stars.push({
+                x: (Math.random() - 0.5) * 80,
+                y: (Math.random() - 0.5) * 40,
+                z: Math.random() * 40 + 1
+            });
+        }
+
+        // 6. Instantiate Large Multi-Window Workspace
+        const windows = [];
+        let lastInstructionCount = 0;
+
+        // Window 1: Large System Telemetry & Gauges (64 x 26)
+        windows.push(new TerminalWindow('sys', 'SYS_TELEMETRY.EXE', 4, 3, 64, 26, (inst, x, y, w, h, active, frame) => {
+            const cpuVal = Math.sin(frame * 0.04) * 25 + 55;
+            const ramVal = 74 + Math.sin(frame * 0.02) * 4;
+            const gpuVal = 62 + Math.cos(frame * 0.03) * 18;
+            const netVal = 82 + Math.sin(frame * 0.06) * 15;
+
+            drawString(inst, x, y + 0, 'MAINFRAME REAL-TIME TELEMETRY MATRIX', C_AMBER, C_WIN_BG);
+            drawString(inst, x, y + 1, 'STATUS: RUNNING (KERNEL OPTIMIZED) | BUS: 128-BIT WEBGPU', C_TEXT_DIM, C_WIN_BG);
+
+            // Real Live Grid & Instruction Pipeline Stats
+            drawString(inst, x, y + 3, `GRID DIMENSIONS : ${cols} cols x ${rows} rows (${(cols * rows).toLocaleString()} total cells)`, C_CYAN, C_WIN_BG);
+            drawString(inst, x, y + 4, `INSTRUCTIONS/FR : ${lastInstructionCount.toLocaleString()} updates/frame`, C_TEXT_GLOW, C_WIN_BG);
+            drawString(inst, x, y + 5, `PIPELINE MODE   : WEBGPU INSTRUCTION (0.20 DECAY PERSISTENCE)`, C_TEXT_MID, C_WIN_BG);
+            drawString(inst, x, y + 6, `ACTIVE MODULES  : ${windows.length} Z-STACKED DRAGGABLE WINDOWS`, C_TEXT_MID, C_WIN_BG);
+
+            // Wide Progress Bar Helper
+            const drawGauge = (row, label, val, unit, color) => {
+                const barWidth = 26;
+                const filled = Math.max(0, Math.min(barWidth, Math.floor((val / 100) * barWidth)));
+                const barStr = '█'.repeat(filled) + '░'.repeat(barWidth - filled);
+                drawString(inst, x, y + row, `${label} [${barStr}] ${Math.floor(val)}${unit}`, color, C_WIN_BG);
+            };
+
+            drawGauge(8,  'CPU LOAD ', cpuVal, '% (8 CORES)', C_TEXT_BRIGHT);
+            drawGauge(9,  'RAM USAGE', ramVal, '% (11.8/16G)', C_TEXT_MID);
+            drawGauge(10, 'GPU LOAD ', gpuVal, '% (WGSL 60F)', C_CYAN);
+            drawGauge(11, 'NET IN/OUT', netVal, 'MB/s (10GbE)', C_AMBER);
+
+            // Real-Time Oscilloscope Wave
+            drawString(inst, x, y + 13, 'REAL-TIME OSCILLOSCOPE CH-A (CORE 4.8 GHz):', C_TEXT_DIM, C_WIN_BG);
+            let waveStrA = '';
+            const waveChars = ['_', '.', '-', '~', '"', '*', '^', '#'];
+            for (let i = 0; i < Math.min(w, 56); i++) {
+                const sA = Math.sin((frame * 0.08) + (i * 0.28)) * 0.5 + 0.5;
+                waveStrA += waveChars[Math.floor(sA * (waveChars.length - 1))];
+            }
+            drawString(inst, x, y + 14, waveStrA, C_TEXT_GLOW, C_WIN_BG);
+
+            // Core Multi-Thermal Readouts
+            drawString(inst, x, y + 16, 'MULTI-CORE TEMPERATURE SENSORS:', C_TEXT_DIM, C_WIN_BG);
+            let coreStr = '';
+            for (let c = 0; c < 6; c++) {
+                const temp = Math.floor(40 + Math.sin(frame * 0.03 + c) * 6);
+                coreStr += `[C${c}:${temp}C] `;
+            }
+            drawString(inst, x, y + 17, coreStr, C_TEXT_MID, C_WIN_BG);
+
+            drawString(inst, x, y + 19, `DPR / RESOLUTION: ${dpr.toFixed(1)}x DPR (${cols * glyphWidth}x${rows * glyphHeight} px viewport)`, C_TEXT_MID, C_WIN_BG);
+            drawString(inst, x, y + 20, `SYSTEM UPTIME   : 418 DAYS, 14:26:08.92`, C_TEXT_DIM, C_WIN_BG);
+        }));
+
+        // Window 2: Large Radar Sweep & Target Tracker (60 x 30)
+        windows.push(new TerminalWindow('radar', 'RADAR_SCAN.DAT', 72, 3, 60, 30, (inst, x, y, w, h, active, frame) => {
+            const centerX = x + 16;
+            const centerY = y + 12;
+            const radius = 10;
+
+            drawString(inst, x, y + 0, 'LONG RANGE PHASED-ARRAY RADAR [SECTOR 04]', C_CYAN, C_WIN_BG);
+            drawString(inst, x, y + 1, 'RADAR RANGE: 250 KM | SCAN FREQUENCY: 12.4 GHz', C_TEXT_DIM, C_WIN_BG);
+
+            // Concentric Radar Rings
+            for (let angle = 0; angle < Math.PI * 2; angle += 0.18) {
+                const rx3 = Math.round(centerX + Math.cos(angle) * radius * 1.55);
+                const ry3 = Math.round(centerY + Math.sin(angle) * radius * 0.85);
+                const rx2 = Math.round(centerX + Math.cos(angle) * (radius * 0.66) * 1.55);
+                const ry2 = Math.round(centerY + Math.sin(angle) * (radius * 0.66) * 0.85);
+                const rx1 = Math.round(centerX + Math.cos(angle) * (radius * 0.33) * 1.55);
+                const ry1 = Math.round(centerY + Math.sin(angle) * (radius * 0.33) * 0.85);
+
+                if (rx3 >= x && rx3 < x + 34 && ry3 >= y + 3 && ry3 < y + h - 7) inst.push({ x: rx3, y: ry3, charCode: 46 /* . */, fg: C_TEXT_DIM, bg: C_WIN_BG });
+                if (rx2 >= x && rx2 < x + 34 && ry2 >= y + 3 && ry2 < y + h - 7) inst.push({ x: rx2, y: ry2, charCode: 58 /* : */, fg: C_TEXT_DIM, bg: C_WIN_BG });
+                if (rx1 >= x && rx1 < x + 34 && ry1 >= y + 3 && ry1 < y + h - 7) inst.push({ x: rx1, y: ry1, charCode: 46 /* . */, fg: C_TEXT_DIM, bg: C_WIN_BG });
+            }
+
+            // Radar Axes
+            for (let ox = -radius; ox <= radius; ox++) {
+                const px = centerX + Math.round(ox * 1.55);
+                if (px >= x && px < x + 34) inst.push({ x: px, y: centerY, charCode: 45 /* - */, fg: C_TEXT_DIM, bg: C_WIN_BG });
+            }
+            for (let oy = -radius + 2; oy <= radius - 2; oy++) {
+                const py = centerY + oy;
+                if (py >= y + 3 && py < y + h - 7) inst.push({ x: centerX, y: py, charCode: 124 /* | */, fg: C_TEXT_DIM, bg: C_WIN_BG });
+            }
+            inst.push({ x: centerX, y: centerY, charCode: 43 /* + */, fg: C_TEXT_BRIGHT, bg: C_WIN_BG });
+
+            // Rotating Sweep Beam
+            const sweepAngle = (frame * 0.04) % (Math.PI * 2);
+            for (let r = 1; r <= radius; r++) {
+                const bx = Math.round(centerX + Math.cos(sweepAngle) * r * 1.55);
+                const by = Math.round(centerY + Math.sin(sweepAngle) * r * 0.85);
+                if (bx >= x && bx < x + 34 && by >= y + 3 && by < y + h - 7) {
+                    inst.push({ x: bx, y: by, charCode: 42 /* * */, fg: C_TEXT_GLOW, bg: C_WIN_BG });
+                }
+            }
+
+            // Orbiting Targets
+            const targetData = [
+                { id: 'T-01', angle: frame * 0.012, dist: radius * 0.8, vel: '450 km/h', type: 'HOSTILE' },
+                { id: 'T-02', angle: frame * -0.018 + 1.8, dist: radius * 0.5, vel: '620 km/h', type: 'NEUTRAL' },
+                { id: 'T-03', angle: frame * 0.008 + 3.6, dist: radius * 0.9, vel: '280 km/h', type: 'FRIENDLY' },
+                { id: 'T-04', angle: frame * -0.01 + 4.9, dist: radius * 0.35, vel: '110 km/h', type: 'UNKNOWN' }
+            ];
+
+            for (let t = 0; t < targetData.length; t++) {
+                const tgt = targetData[t];
+                const tx = Math.round(centerX + Math.cos(tgt.angle) * tgt.dist * 1.55);
+                const ty = Math.round(centerY + Math.sin(tgt.angle) * tgt.dist * 0.85);
+                if (tx >= x && tx < x + 34 && ty >= y + 3 && ty < y + h - 7) {
+                    inst.push({ x: tx, y: ty, charCode: 35 /* # */, fg: tgt.type === 'HOSTILE' ? C_RED : C_AMBER, bg: C_WIN_BG });
+                    drawString(inst, tx + 1, ty, tgt.id, C_TEXT_GLOW, C_WIN_BG);
+                }
+            }
+
+            // Target Telemetry List on Right Side of Window
+            const panelX = x + 34;
+            drawString(inst, panelX, y + 3, 'ACTIVE CONTACTS:', C_AMBER, C_WIN_BG);
+            drawString(inst, panelX, y + 4, '───────────────────────', C_TEXT_DIM, C_WIN_BG);
+            drawString(inst, panelX, y + 5, `BEARING : ${(sweepAngle * 180 / Math.PI).toFixed(1)} DEG`, C_TEXT_BRIGHT, C_WIN_BG);
+            drawString(inst, panelX, y + 6, `CONTACTS: 4 DETECTED`, C_TEXT_MID, C_WIN_BG);
+
+            for (let t = 0; t < targetData.length; t++) {
+                const tgt = targetData[t];
+                const rowY = y + 8 + t * 3;
+                const col = tgt.type === 'HOSTILE' ? C_RED : (tgt.type === 'FRIENDLY' ? C_TEXT_BRIGHT : C_AMBER);
+                drawString(inst, panelX, rowY + 0, `[${tgt.id}] ${tgt.type}`, col, C_WIN_BG);
+                drawString(inst, panelX, rowY + 1, `SPD:${tgt.vel} RNG:${Math.floor(tgt.dist * 18)}KM`, C_TEXT_DIM, C_WIN_BG);
+            }
+
+            drawString(inst, x, y + h - 3, 'IFF TRANSPONDER: ACTIVE │ AUTO-LOCK ENGAGED', C_CYAN, C_WIN_BG);
+            drawString(inst, x, y + h - 2, 'THREAT ASSESSMENT: LEVEL 2 ELEVATED', C_AMBER, C_WIN_BG);
+        }));
+
+        // Window 3: 3D Starfield Warp Simulation (58 x 26)
+        windows.push(new TerminalWindow('stars', 'STARFIELD_WARP.EXE', 38, 12, 58, 24, (inst, x, y, w, h, active, frame) => {
+            const centerX = x + Math.floor(w / 2);
+            const centerY = y + 10;
+
+            drawString(inst, x, y + 0, '3D WARP VECTOR SIMULATOR [WARP FACTOR 6.4]', C_CYAN, C_WIN_BG);
+            drawString(inst, x, y + 1, 'TRAJECTORY: SECTOR EPSILON-9 │ HEADING: 042.8 MK 14', C_TEXT_DIM, C_WIN_BG);
+
+            // Crosshair center
+            inst.push({ x: centerX, y: centerY, charCode: 43 /* + */, fg: C_AMBER, bg: C_WIN_BG });
+            drawString(inst, centerX - 4, centerY - 2, '[   ]', C_TEXT_DIM, C_WIN_BG);
+
+            // Update & Render Stars
+            const starChars = ['@', 'O', 'o', '*', '+', '•', '∙'];
+            for (let i = 0; i < stars.length; i++) {
+                const s = stars[i];
+                s.z -= 0.6;
+                if (s.z <= 0.5) {
+                    s.z = 35;
+                    s.x = (Math.random() - 0.5) * 80;
+                    s.y = (Math.random() - 0.5) * 40;
+                }
+
+                const px = Math.round(centerX + (s.x / s.z) * 18);
+                const py = Math.round(centerY + (s.y / s.z) * 10);
+
+                if (px >= x && px < x + w && py >= y + 3 && py < y + h - 4) {
+                    const charIdx = Math.min(starChars.length - 1, Math.floor((s.z / 35) * starChars.length));
+                    const fgCol = s.z < 8 ? C_TEXT_GLOW : (s.z < 18 ? C_TEXT_BRIGHT : C_TEXT_DIM);
+                    drawString(inst, px, py, starChars[charIdx], fgCol, C_WIN_BG);
+                }
+            }
+
+            drawString(inst, x, y + h - 3, 'VELOCITY: 0.88c │ DEFLECTOR SHIELDS: 100%', C_TEXT_MID, C_WIN_BG);
+            drawString(inst, x, y + h - 2, 'COORDINATES: [X: +1842.1, Y: -904.3, Z: +44810.9]', C_AMBER, C_WIN_BG);
+        }));
+
+        // 7. Responsive Window Placement & Clamping
+        function clampWindowPositions() {
+            for (let i = 0; i < windows.length; i++) {
+                const win = windows[i];
+                // Keep top-left corner on-screen so titlebar & controls are always accessible
+                const maxX = Math.max(2, cols - 14);
+                const maxY = Math.max(2, rows - 4);
+                win.x = Math.max(2, Math.min(maxX, win.x));
+                win.y = Math.max(2, Math.min(maxY, win.y));
+            }
+        }
+
+        function initWindowLayout() {
+            if (cols >= 140) {
+                // Wide Desktop: Balanced multi-window arrangement
+                if (windows[0]) { windows[0].x = 4;  windows[0].y = 3; }   // SYS_TELEMETRY
+                if (windows[1]) { windows[1].x = 72; windows[1].y = 3; }   // RADAR_SCAN
+                if (windows[2]) { windows[2].x = 36; windows[2].y = 15; }  // STARFIELD_WARP
+            } else if (cols >= 90) {
+                // Medium Desktop: 2-column cascade
+                if (windows[0]) { windows[0].x = 2;  windows[0].y = 2; }
+                if (windows[1]) { windows[1].x = Math.max(2, cols - 64); windows[1].y = 3; }
+                if (windows[2]) { windows[2].x = 16; windows[2].y = 10; }
+            } else {
+                // Compact / High-Zoom Desktop: Clean staggered cascade
+                for (let i = 0; i < windows.length; i++) {
+                    const win = windows[i];
+                    win.x = 2 + (i * 4);
+                    win.y = 2 + (i * 3);
+                }
+            }
+
+            clampWindowPositions();
+        }
+
+        let activeWindowIndex = windows.length - 1; // Top-most window
+
+        // 8. Interaction Handlers (Dragging & Window Focus)
+        let draggedWindow = null;
+
+        function getGridPos(event) {
+            const rect = asciiCanvas.getBoundingClientRect();
+            const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+            const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+
+            const scaleX = cols / rect.width;
+            const scaleY = rows / rect.height;
+
+            const cellX = Math.floor((clientX - rect.left) * scaleX);
+            const cellY = Math.floor((clientY - rect.top) * scaleY);
+            return { cellX, cellY };
+        }
+
+        function handlePointerDown(event) {
+            const { cellX, cellY } = getGridPos(event);
+
+            // Check windows from top of z-stack to bottom
+            for (let i = windows.length - 1; i >= 0; i--) {
+                const win = windows[i];
+                if (win.contains(cellX, cellY)) {
+                    // Bring to front
+                    windows.splice(i, 1);
+                    windows.push(win);
+                    activeWindowIndex = windows.length - 1;
+
+                    // If clicked on titlebar, begin dragging
+                    if (win.isTitleBar(cellX, cellY)) {
+                        draggedWindow = win;
+                        win.isDragging = true;
+                        win.dragOffsetX = cellX - win.x;
+                        win.dragOffsetY = cellY - win.y;
+                    }
+                    event.preventDefault();
+                    return;
+                }
+            }
+        }
+
+        function handlePointerMove(event) {
+            if (!draggedWindow) return;
+            const { cellX, cellY } = getGridPos(event);
+
+            draggedWindow.x = Math.max(0, Math.min(cols - draggedWindow.w, cellX - draggedWindow.dragOffsetX));
+            draggedWindow.y = Math.max(1, Math.min(rows - draggedWindow.h - 1, cellY - draggedWindow.dragOffsetY));
+            event.preventDefault();
+        }
+
+        function handlePointerUp() {
+            if (draggedWindow) {
+                draggedWindow.isDragging = false;
+                draggedWindow = null;
+            }
+        }
+
+        asciiCanvas.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', handlePointerUp);
+
+        asciiCanvas.addEventListener('touchstart', handlePointerDown, { passive: false });
+        window.addEventListener('touchmove', handlePointerMove, { passive: false });
+        window.addEventListener('touchend', handlePointerUp);
+        window.addEventListener('touchcancel', handlePointerUp);
+
+        // 9. Main Render Loop
+        let frameCount = 0;
+
+        function renderFrame() {
+            if (!renderer) return;
+
+            const instructions = [];
+
+            // 9.1 Desktop Background Grid
+            for (let y = 1; y < rows - 1; y++) {
+                for (let x = 0; x < cols; x++) {
+                    const isDot = (x % 8 === 0) && (y % 4 === 0);
+                    instructions.push({
+                        x: x,
+                        y: y,
+                        charCode: isDot ? 46 /* . */ : 32 /* space */,
+                        fg: C_DESKTOP_DOT,
+                        bg: C_DESKTOP_BG
+                    });
+                }
+            }
+
+            // 9.2 Top Desktop Menu Bar
+            fillRect(instructions, 0, 0, cols, 1, 32, C_HEADER_FG, C_HEADER_BG);
+            drawString(instructions, 1, 0, ' ≡ WE VIBE THE SLOP', C_HEADER_FG, C_HEADER_BG);
+            const now = new Date();
+            const timeStr = `TIME: ${now.toTimeString().split(' ')[0]} `;
+            if (cols > 70) {
+                drawString(instructions, cols - timeStr.length - 1, 0, timeStr, C_AMBER, C_HEADER_BG);
+            }
+
+            // 9.3 Render Windows in Z-Stack Order
+            for (let i = 0; i < windows.length; i++) {
+                const isActive = (i === windows.length - 1);
+                windows[i].render(instructions, isActive, frameCount);
+            }
+
+            // 9.4 Bottom Status Bar
+            fillRect(instructions, 0, rows - 1, cols, 1, 32, C_STATUS_FG, C_STATUS_BG);
+            drawString(instructions, 1, rows - 1, ' ► CLICK & DRAG TITLEBARS TO MOVE WINDOWS │ CLICK TO FOCUS', C_STATUS_FG, C_STATUS_BG);
+
+            // Record total instruction updates dispatched this frame
+            lastInstructionCount = instructions.length;
+
+            // Dispatch full instruction update to WebGPU pipeline
+            renderer.draw(instructions);
+
+            frameCount++;
+            requestAnimationFrame(renderFrame);
+        }
+
+        // 10. Initialization
+        async function init() {
+            // Instruction Mode with 0.20 phosphor motion persistence
+            renderer = GlyphWebGPU.Instructions(asciiCanvas, cols, rows, 0.15);
+
+            // Load Font Atlas PNG
+            await renderer.loadGlyphsURL(
+                '../fonts/cp437_12x24_atlas.png',
+                192, 384,
+                glyphWidth, glyphHeight
+            );
+
+            // Calculate adaptive initial window positions within visible screen
+            initWindowLayout();
+
+            // Initial clear with desktop background
+            renderer.clear(32, C_DESKTOP_DOT, C_DESKTOP_BG);
+
+            requestAnimationFrame(renderFrame);
+        }
+
+        // 11. Resize Handling
+        window.addEventListener('resize', () => {
+            cols = Math.floor(window.innerWidth * dpr / cellWidth);
+            rows = Math.floor(window.innerHeight * dpr / cellHeight);
+
+            asciiCanvas.width = cols * glyphWidth;
+            asciiCanvas.height = rows * glyphHeight;
+            asciiCanvas.style.width = `${(cols * cellWidth) / dpr}px`;
+            asciiCanvas.style.height = `${(rows * cellHeight) / dpr}px`;
+
+            // Re-clamp all windows within the new grid dimensions
+            clampWindowPositions();
+
+            if (renderer) {
+                renderer.resize(cols, rows);
+                renderer.clear(32, C_DESKTOP_DOT, C_DESKTOP_BG);
+            }
+        });
+
+        init();
+    </script>
+</body>
+</html>

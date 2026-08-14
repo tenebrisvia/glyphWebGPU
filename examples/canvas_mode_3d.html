@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Canvas mode example</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            background-color: #000000;
+            color: #e0e0e0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            touch-action: none;
+        }
+        #sourceCanvas {
+            display: none;
+        }
+    </style>
+    <script src="../thirdparty/p5.min.js"></script>
+    <script src="../glyphWebGPU.js"></script>
+</head>
+<body>
+    <canvas id="sourceCanvas"></canvas>
+    <canvas id="asciiCanvas"></canvas>
+    <script>
+        "use strict";
+
+        // 1. Grid & Scene Configuration
+        const glyphWidth = 8;
+        const glyphHeight = 8;
+        const ZOOM = 1.0; // Grid cell scale factor
+        const cellWidth = glyphWidth * ZOOM;
+        const cellHeight = glyphHeight * ZOOM;
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+        const settings = {
+            stroke_width: 32,
+            noise_incr: 0.001,
+            rotation_strength: 0.4,
+            animate: true,
+            noiseXOffset: 0,
+            noiseYOffset: 1000,
+            fileWidth: 128,
+            fileHeight: 128,
+            charWidth: 8,
+            charHeight: 8
+        };
+
+        let cols = Math.floor(window.innerWidth * dpr / cellWidth);
+        let rows = Math.floor(window.innerHeight * dpr / cellHeight);
+
+        const sourceCanvas = document.getElementById('sourceCanvas');
+        const asciiCanvas = document.getElementById('asciiCanvas');
+
+        asciiCanvas.width = cols * glyphWidth;
+        asciiCanvas.height = rows * glyphHeight;
+        asciiCanvas.style.width = `${(cols * cellWidth) / dpr}px`;
+        asciiCanvas.style.height = `${(rows * cellHeight) / dpr}px`;
+
+        let glyphRenderer = null;
+        let cam;
+        let mesh = null;
+        let rx_orig = 0, ry_orig = 0;
+        let f_R, f_G, f_B;
+        let b_R, b_G, b_B;
+
+        // Interactive Mouse / Touch Physics
+        const mouse = {
+            damping: 0.94,
+            rotate: {
+                isDragging: false,
+                previous: [0, 0],
+                velocity: [0, 0],
+                rotation: [0, 0]
+            },
+            pan: {
+                isDragging: false,
+                previous: [0, 0],
+                velocity: [0, 0],
+                translation: [0, 0]
+            },
+            zoom: {
+                velocity: 0,
+                scale: 0.8
+            }
+        };
+
+        // 2. p5.js Preload for 3D Model Loading
+        function preload() {
+            mesh = loadModel('./snag.obj', true);
+        }
+
+        // 3. p5.js Setup Callback
+        async function setup() {
+            pixelDensity(1);
+            createCanvas(cols, rows, WEBGL, sourceCanvas);
+            angleMode(RADIANS);
+
+            if (mesh) {
+                mesh.computeNormals(SMOOTH);
+            }
+
+            cam = createCamera();
+            cam.setPosition(0, 0, 1000);
+
+            // ASCII Character & Palette Initialization
+            const charMap = new Float32Array(256);
+            const ramp = [32, 46, 58, 45, 61, 43, 42, 35, 37, 64];
+            for (let i = 0; i < 256; i++) {
+                const rampIdx = Math.floor((i / 256) * ramp.length);
+                charMap[i] = ramp[rampIdx];
+            }
+
+            // Grayscale
+            const bwFGColors = new Float32Array(256 * 4);
+            for (let i = 0; i < 256; i++) {
+                const step = Math.floor((i / 256) * 4);
+                const val = (step + 1) / 4.0;
+                bwFGColors[i * 4 + 0] = val;
+                bwFGColors[i * 4 + 1] = val;
+                bwFGColors[i * 4 + 2] = val;
+            }
+
+            const bgColors = new Float32Array(256 * 4);
+            for (let i = 0; i < 256; i++) {
+                bgColors[i * 4 + 0] = 0.0;
+                bgColors[i * 4 + 1] = 0.0;
+                bgColors[i * 4 + 2] = 0.0;
+            }
+
+            // Initialize WebGPU Glyph Engine in Canvas Mode
+            try {
+                glyphRenderer = new GlyphWebGPU(sourceCanvas, asciiCanvas, cols, rows, 0.0);
+                glyphRenderer.setPalettes(charMap, bwFGColors, bgColors);
+                await glyphRenderer.loadGlyphsURL(
+                    '../fonts/Amstrad_CPC_Full_AMSDOS_Character_Set.png',
+                    settings.fileWidth,
+                    settings.fileHeight,
+                    settings.charWidth,
+                    settings.charHeight
+                );
+            } catch (ex) {
+                console.error("GlyphWebGPU Initialization Failed:", ex);
+                const errDiv = document.createElement('div');
+                errDiv.style.position = 'absolute';
+                errDiv.style.top = '10px';
+                errDiv.style.color = '#ff4444';
+                errDiv.style.background = 'rgba(0,0,0,0.8)';
+                errDiv.style.padding = '8px';
+                errDiv.textContent = 'WebGPU Error: ' + ex.message;
+                document.body.appendChild(errDiv);
+            }
+
+            // Mouse & Touch Controls Setup
+            setupControls();
+
+            rx_orig = noise(settings.noiseXOffset) * TWO_PI * settings.rotation_strength;
+            ry_orig = noise(settings.noiseYOffset) * TWO_PI * settings.rotation_strength;
+        }
+
+        // 4. p5.js WebGL Draw Loop
+        function draw() {
+            // Camera & Scene Lighting
+            cam.lookAt(0, 0, 0);
+            noStroke();
+            background(255);
+            ambientLight(30);
+            pointLight(225, 225, 225, -200, -1200, 500);
+            specularMaterial(240, 240, 240);
+            shininess(15);
+
+            // Procedural Rotation Noise
+            let rx = (noise(settings.noiseXOffset) * TWO_PI * settings.rotation_strength) - rx_orig;
+            let ry = (noise(settings.noiseYOffset) * TWO_PI * settings.rotation_strength) - ry_orig;
+
+            const cosY = cos(PI - mouse.rotate.rotation[0] + ry);
+            const sinY = sin(PI - mouse.rotate.rotation[0] + ry);
+            const cosX = cos(PI - mouse.rotate.rotation[1] + rx);
+            const sinX = sin(PI - mouse.rotate.rotation[1] + rx);
+
+            // Render 3D Model with Matrix Transform
+            if (mesh) {
+                push();
+                applyMatrix(
+                    cosY * mouse.zoom.scale, sinX * sinY * mouse.zoom.scale, -cosX * sinY * mouse.zoom.scale, 0,
+                    0, cosX * mouse.zoom.scale, sinX, 0,
+                    sinY * mouse.zoom.scale, -sinX * cosY * mouse.zoom.scale, cosX * cosY * mouse.zoom.scale, 0,
+                    mouse.pan.translation[0], mouse.pan.translation[1], 0, 1
+                );
+                model(mesh);
+                pop();
+            }
+
+            if (settings.animate) {
+                settings.noiseXOffset += settings.noise_incr;
+                settings.noiseYOffset += settings.noise_incr;
+            }
+
+            // WebGPU ASCII Render Pass
+            if (glyphRenderer) {
+                glyphRenderer.draw();
+            }
+
+            // Update Physics (Zoom, Rotate, Pan with Damping)
+            updatePhysics();
+        }
+
+        function updatePhysics() {
+            // Zoom physics
+            mouse.zoom.scale = constrain(mouse.zoom.scale + mouse.zoom.velocity, 0.1, 3.0);
+            mouse.zoom.velocity *= mouse.damping;
+            if (abs(mouse.zoom.velocity) < 0.001) mouse.zoom.velocity = 0;
+
+            // Rotation physics
+            if (!mouse.rotate.isDragging) {
+                mouse.rotate.rotation[0] += mouse.rotate.velocity[0];
+                mouse.rotate.rotation[1] += mouse.rotate.velocity[1];
+                mouse.rotate.velocity[0] *= mouse.damping;
+                mouse.rotate.velocity[1] *= mouse.damping;
+                if (abs(mouse.rotate.velocity[0]) < 0.001) mouse.rotate.velocity[0] = 0;
+                if (abs(mouse.rotate.velocity[1]) < 0.001) mouse.rotate.velocity[1] = 0;
+            }
+
+            // Panning physics
+            if (!mouse.pan.isDragging) {
+                mouse.pan.translation[0] += mouse.pan.velocity[0];
+                mouse.pan.translation[1] += mouse.pan.velocity[1];
+                mouse.pan.velocity[0] *= mouse.damping;
+                mouse.pan.velocity[1] *= mouse.damping;
+                if (abs(mouse.pan.velocity[0]) < 0.1) mouse.pan.velocity[0] = 0;
+                if (abs(mouse.pan.velocity[1]) < 0.1) mouse.pan.velocity[1] = 0;
+            }
+        }
+
+        // 5. Mouse & Multi-Touch Controls Setup
+        function setupControls() {
+            asciiCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            asciiCanvas.addEventListener('mousedown', (event) => {
+                let adjust = null;
+                if (event.button === 0) adjust = mouse.rotate;
+                else if (event.button === 2) adjust = mouse.pan;
+
+                if (adjust != null) {
+                    adjust.isDragging = true;
+                    adjust.previous = [event.clientX, event.clientY];
+                    adjust.velocity = [0, 0];
+                }
+                return false;
+            });
+
+            asciiCanvas.addEventListener('mousemove', (event) => {
+                if (mouse.rotate.isDragging && (event.buttons & 1)) {
+                    const deltaX = event.clientX - mouse.rotate.previous[0];
+                    const deltaY = event.clientY - mouse.rotate.previous[1];
+
+                    mouse.rotate.rotation[0] += deltaX * 0.005;
+                    mouse.rotate.rotation[1] += deltaY * 0.005;
+                    mouse.rotate.velocity = [deltaX * 0.005, deltaY * 0.005];
+                    mouse.rotate.previous = [event.clientX, event.clientY];
+                } else if (mouse.pan.isDragging && (event.buttons & 2)) {
+                    const deltaX = event.clientX - mouse.pan.previous[0];
+                    const deltaY = event.clientY - mouse.pan.previous[1];
+
+                    mouse.pan.translation[0] += deltaX * 0.5;
+                    mouse.pan.translation[1] += deltaY * 0.5;
+                    mouse.pan.velocity = [deltaX * 0.5, deltaY * 0.5];
+                    mouse.pan.previous = [event.clientX, event.clientY];
+                }
+                return false;
+            });
+
+            asciiCanvas.addEventListener('wheel', (event) => {
+                event.preventDefault();
+                mouse.zoom.velocity += (event.deltaY < 0) ? 0.015 : -0.015;
+            }, { passive: false });
+
+            asciiCanvas.addEventListener('mouseup', () => {
+                mouse.rotate.isDragging = mouse.pan.isDragging = false;
+            });
+
+            asciiCanvas.addEventListener('mouseout', () => {
+                mouse.rotate.isDragging = mouse.pan.isDragging = false;
+            });
+
+            // Touch Support (1-finger rotate, 2-finger pan & pinch-zoom)
+            const touchState = {
+                previousDist: 0,
+                previousMid: [0, 0]
+            };
+
+            asciiCanvas.addEventListener('touchstart', (event) => {
+                event.preventDefault();
+                if (event.touches.length === 1) {
+                    mouse.rotate.isDragging = true;
+                    mouse.pan.isDragging = false;
+                    mouse.rotate.previous = [event.touches[0].clientX, event.touches[0].clientY];
+                    mouse.rotate.velocity = [0, 0];
+                } else if (event.touches.length === 2) {
+                    mouse.rotate.isDragging = false;
+                    mouse.pan.isDragging = true;
+
+                    const midX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
+                    const midY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+                    const dist = Math.hypot(
+                        event.touches[1].clientX - event.touches[0].clientX,
+                        event.touches[1].clientY - event.touches[0].clientY
+                    );
+
+                    touchState.previousMid = [midX, midY];
+                    touchState.previousDist = dist;
+                    mouse.pan.previous = [midX, midY];
+                    mouse.pan.velocity = [0, 0];
+                }
+            }, { passive: false });
+
+            asciiCanvas.addEventListener('touchmove', (event) => {
+                event.preventDefault();
+                if (event.touches.length === 1 && mouse.rotate.isDragging) {
+                    const touch = event.touches[0];
+                    const deltaX = touch.clientX - mouse.rotate.previous[0];
+                    const deltaY = touch.clientY - mouse.rotate.previous[1];
+
+                    mouse.rotate.rotation[0] += deltaX * 0.005;
+                    mouse.rotate.rotation[1] += deltaY * 0.005;
+                    mouse.rotate.velocity = [deltaX * 0.005, deltaY * 0.005];
+                    mouse.rotate.previous = [touch.clientX, touch.clientY];
+                } else if (event.touches.length === 2 && mouse.pan.isDragging) {
+                    const midX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
+                    const midY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+                    const dist = Math.hypot(
+                        event.touches[1].clientX - event.touches[0].clientX,
+                        event.touches[1].clientY - event.touches[0].clientY
+                    );
+
+                    const deltaMidX = midX - touchState.previousMid[0];
+                    const deltaMidY = midY - touchState.previousMid[1];
+
+                    mouse.pan.translation[0] += deltaMidX * 0.5;
+                    mouse.pan.translation[1] += deltaMidY * 0.5;
+                    mouse.pan.velocity = [deltaMidX * 0.5, deltaMidY * 0.5];
+
+                    const deltaDist = dist - touchState.previousDist;
+                    mouse.zoom.velocity += deltaDist * 0.001;
+
+                    touchState.previousMid = [midX, midY];
+                    touchState.previousDist = dist;
+                }
+            }, { passive: false });
+
+            asciiCanvas.addEventListener('touchend', (event) => {
+                if (event.touches.length === 0) {
+                    mouse.rotate.isDragging = false;
+                    mouse.pan.isDragging = false;
+                } else if (event.touches.length === 1) {
+                    mouse.pan.isDragging = false;
+                    mouse.rotate.isDragging = true;
+                    mouse.rotate.previous = [event.touches[0].clientX, event.touches[0].clientY];
+                    mouse.rotate.velocity = [0, 0];
+                }
+            });
+
+            asciiCanvas.addEventListener('touchcancel', () => {
+                mouse.rotate.isDragging = false;
+                mouse.pan.isDragging = false;
+            });
+        }
+
+        // 6. Responsive Window Resize Handler
+        function windowResized() {
+            const currentDpr = Math.min(window.devicePixelRatio || 1, 2);
+            cols = Math.floor(window.innerWidth * currentDpr / cellWidth);
+            rows = Math.floor(window.innerHeight * currentDpr / cellHeight);
+
+            asciiCanvas.width = cols * glyphWidth;
+            asciiCanvas.height = rows * glyphHeight;
+            asciiCanvas.style.width = `${(cols * cellWidth) / currentDpr}px`;
+            asciiCanvas.style.height = `${(rows * cellHeight) / currentDpr}px`;
+
+            resizeCanvas(cols, rows);
+            if (glyphRenderer) {
+                glyphRenderer.resize(cols, rows);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam example</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+        body {
+            background-color: #050608;
+            color: #d8e2ed;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Courier New', monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+        }
+        #ascii-canvas {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.9);
+        }
+        /* Top UI Controls Bar */
+        .control-bar {
+            position: fixed;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(14, 18, 25, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(50, 70, 95, 0.5);
+            padding: 8px 18px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            z-index: 100;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+            font-size: 13px;
+        }
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+            padding-right: 10px;
+            border-right: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #ff4757;
+        }
+        .status-dot.active {
+            background: #2ed573;
+            box-shadow: 0 0 10px #2ed573;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .mode-btn {
+            background: rgba(25, 33, 46, 0.8);
+            color: #8fa0b5;
+            border: 1px solid rgba(60, 80, 110, 0.4);
+            padding: 6px 14px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.15s ease;
+        }
+        .mode-btn:hover {
+            background: rgba(35, 48, 68, 0.9);
+            color: #fff;
+        }
+        .mode-btn.active {
+            background: #1e90ff;
+            color: #ffffff;
+            border-color: #70a1ff;
+            box-shadow: 0 0 12px rgba(30, 144, 255, 0.5);
+        }
+        .toggle-btn {
+            background: none;
+            border: 1px solid rgba(60, 80, 110, 0.4);
+            color: #8fa0b5;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.15s ease;
+        }
+        .toggle-btn:hover {
+            color: #fff;
+        }
+        .toggle-btn.active {
+            background: rgba(46, 213, 115, 0.2);
+            color: #2ed573;
+            border-color: #2ed573;
+        }
+
+        /* Error Notification Banner */
+        #error-overlay {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(26, 12, 14, 0.95);
+            border: 1px solid #ff4757;
+            border-radius: 12px;
+            padding: 24px 32px;
+            max-width: 480px;
+            text-align: center;
+            display: none;
+            z-index: 200;
+            box-shadow: 0 0 40px rgba(255, 71, 87, 0.4);
+        }
+        #error-overlay h2 {
+            color: #ff4757;
+            font-size: 18px;
+            margin-bottom: 8px;
+            font-family: monospace;
+        }
+        #error-overlay p {
+            color: #f1f2f6;
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+        #error-overlay button {
+            background: #ff4757;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 18px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        #error-overlay button:hover {
+            background: #ff6b81;
+        }
+    </style>
+</head>
+<body>
+    <!-- Top Floating Control Bar -->
+    <div class="control-bar">
+        <div class="status-badge">
+            <div id="status-dot" class="status-dot"></div>
+            <span id="status-text">WEBCAM INIT</span>
+        </div>
+        <button id="btn-rgb" class="mode-btn active" onclick="switchMode('rgb')">RGB Mode</button>
+        <button id="btn-bw" class="mode-btn" onclick="switchMode('bw')">B&W Mode</button>
+        <button id="btn-mirror" class="toggle-btn active" onclick="toggleMirror()">Mirror: ON</button>
+    </div>
+
+    <!-- Error Modal Overlay -->
+    <div id="error-overlay">
+        <h2>[!] WEBCAM ACQUISITION FAILED</h2>
+        <p id="error-msg">No video capture device was detected or permission was denied. Please allow camera permissions in your browser and ensure a webcam is connected.</p>
+        <button onclick="initWebcam()">Retry Webcam</button>
+    </div>
+
+    <!-- Presentation WebGPU Canvas -->
+    <canvas id="ascii-canvas"></canvas>
+
+    <!-- Hidden Offscreen 2D Source Canvas & Video -->
+    <canvas id="source-canvas" style="display: none;"></canvas>
+    <video id="webcam-video" playsinline autoplay muted style="display: none;"></video>
+
+    <!-- GlyphWebGPU Engine -->
+    <script src="../glyphWebGPU.js"></script>
+
+    <script>
+        // 1. Grid & Glyph Metric Configuration
+        const glyphWidth  = 8;
+        const glyphHeight = 8;
+        const zoom        = 1.0;
+        const cellWidth   = glyphWidth * zoom;
+        const cellHeight  = glyphHeight * zoom;
+
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        let cols = Math.floor(window.innerWidth * dpr / cellWidth);
+        let rows = Math.floor(window.innerHeight * dpr / cellHeight);
+
+        const asciiCanvas = document.getElementById('ascii-canvas');
+        const sourceCanvas = document.getElementById('source-canvas');
+        const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true });
+        const videoElement = document.getElementById('webcam-video');
+
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const errorOverlay = document.getElementById('error-overlay');
+        const errorMsg = document.getElementById('error-msg');
+
+        asciiCanvas.width = cols * glyphWidth;
+        asciiCanvas.height = rows * glyphHeight;
+        asciiCanvas.style.width = `${(cols * cellWidth) / dpr}px`;
+        asciiCanvas.style.height = `${(rows * cellHeight) / dpr}px`;
+
+        sourceCanvas.width = cols;
+        sourceCanvas.height = rows;
+
+        let glyphRenderer = null;
+        let isVideoReady = false;
+        let mirrorVideo = true;
+        let currentMode = 'rgb'; // 'rgb' | 'bw'
+
+        // 2. Pre-computed Palettes
+        // 2.1 High-contrast ASCII Density Ramp
+        const charMap = new Float32Array(256);
+        const ramp = [32, 46, 58, 45, 61, 43, 42, 35, 37, 64]; // [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@']
+        for (let i = 0; i < 256; i++) {
+            const rampIdx = Math.floor((i / 256) * ramp.length);
+            charMap[i] = ramp[rampIdx];
+        }
+
+        // 2.2 Background Palette
+        const bgColors = new Float32Array(256 * 4);
+        for (let i = 0; i < 256; i++) {
+            bgColors[i * 4 + 0] = 0.0;
+            bgColors[i * 4 + 1] = 0.0;
+            bgColors[i * 4 + 2] = 0.0;
+        }
+
+        // 2.3 Black & White 8-Shade Quantized Foreground Palette
+        const bwFGColors = new Float32Array(256 * 4);
+        for (let i = 0; i < 256; i++) {
+            // Cluster the 256 luminance values into 8 discrete, distinct steps of gray (0..7)
+            const step = Math.floor((i / 256) * 8);
+            const val = (step + 1) / 8.0; // 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0
+            bwFGColors[i * 4 + 0] = val;
+            bwFGColors[i * 4 + 1] = val;
+            bwFGColors[i * 4 + 2] = val;
+        }
+
+        // 3. Mode Switching Functions
+        function switchMode(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+
+            if (mode === 'rgb') {
+                document.getElementById('btn-rgb').classList.add('active');
+                if (glyphRenderer) glyphRenderer.setPalettes(charMap, null, bgColors);
+            } else if (mode === 'bw') {
+                document.getElementById('btn-bw').classList.add('active');
+                if (glyphRenderer) glyphRenderer.setPalettes(charMap, bwFGColors, bgColors);
+            }
+        }
+
+
+        function toggleMirror() {
+            mirrorVideo = !mirrorVideo;
+            const btn = document.getElementById('btn-mirror');
+            btn.textContent = `Mirror: ${mirrorVideo ? 'ON' : 'OFF'}`;
+            btn.classList.toggle('active', mirrorVideo);
+        }
+
+        // 4. Webcam Initialization with Fallback Error Handling
+        async function initWebcam() {
+            errorOverlay.style.display = 'none';
+            statusDot.classList.remove('active');
+            statusText.textContent = 'CONNECTING...';
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showError('Browser does not support navigator.mediaDevices.getUserMedia API.');
+                return;
+            }
+
+            try {
+                // Request the primary user-facing video camera stream
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'user',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    },
+                    audio: false
+                });
+
+                videoElement.srcObject = stream;
+                await videoElement.play();
+
+                isVideoReady = true;
+                statusDot.classList.add('active');
+                statusText.textContent = 'LIVE WEBCAM';
+            } catch (err) {
+                console.error('Webcam initialization error:', err);
+                isVideoReady = false;
+                showError(err.name === 'NotAllowedError'
+                    ? 'Camera access was denied. Please allow camera permissions in your browser bar.'
+                    : `No active camera stream available: ${err.message || 'Device not found.'}`
+                );
+            }
+        }
+
+        function showError(msg) {
+            statusDot.classList.remove('active');
+            statusText.textContent = 'NO WEBCAM';
+            errorMsg.textContent = msg;
+            errorOverlay.style.display = 'block';
+        }
+
+        // 5. Main Initialization & Render Loop
+        async function init() {
+            // Instantiate Canvas Mode GlyphWebGPU engine with 0.0 decay persistence
+            glyphRenderer = new GlyphWebGPU(sourceCanvas, asciiCanvas, cols, rows, 0.0);
+
+            // Load Font Atlas PNG
+            await glyphRenderer.loadGlyphsURL(
+                '../fonts/Amstrad_CPC_Full_AMSDOS_Character_Set.png',
+                128, 128,
+                8, 8
+            );
+
+            // Initial mode setup
+            switchMode('rgb');
+
+            // Start webcam stream
+            await initWebcam();
+
+            // Start animation frame pump
+            requestAnimationFrame(render);
+        }
+
+        let frameCount = 0;
+
+        function render() {
+            if (isVideoReady && videoElement.readyState >= 2) {
+                sourceCtx.save();
+                if (mirrorVideo) {
+                    sourceCtx.translate(cols, 0);
+                    sourceCtx.scale(-1, 1);
+                }
+
+                // Compute aspect ratio crop to fill the full ASCII grid
+                const vWidth = videoElement.videoWidth;
+                const vHeight = videoElement.videoHeight;
+                const videoRatio = vWidth / vHeight;
+                const gridRatio = cols / rows;
+
+                let sX = 0, sY = 0, sW = vWidth, sH = vHeight;
+                if (videoRatio > gridRatio) {
+                    sW = vHeight * gridRatio;
+                    sX = (vWidth - sW) / 2;
+                } else {
+                    sH = vWidth / gridRatio;
+                    sY = (vHeight - sH) / 2;
+                }
+
+                sourceCtx.drawImage(videoElement, sX, sY, sW, sH, 0, 0, cols, rows);
+                sourceCtx.restore();
+            } else if (!isVideoReady) {
+                // Generative Calibration Grid / Test Pattern when no webcam is active
+                sourceCtx.fillStyle = '#05070a';
+                sourceCtx.fillRect(0, 0, cols, rows);
+
+                const t = frameCount * 0.04;
+                const cx = cols / 2;
+                const cy = rows / 2;
+
+                // Orbiting test pattern
+                for (let i = 0; i < 4; i++) {
+                    const ang = t + (i * Math.PI / 2);
+                    const dist = Math.sin(t * 0.5) * (Math.min(cols, rows) * 0.28);
+                    const px = cx + Math.cos(ang) * dist;
+                    const py = cy + Math.sin(ang) * dist;
+
+                    const colors = ['#ff3838', '#2ed573', '#1e90ff', '#eccc68'];
+                    sourceCtx.fillStyle = colors[i];
+                    sourceCtx.beginPath();
+                    sourceCtx.arc(px, py, 12, 0, Math.PI * 2);
+                    sourceCtx.fill();
+                }
+            }
+
+            if (glyphRenderer) {
+                glyphRenderer.draw();
+            }
+
+            frameCount++;
+            requestAnimationFrame(render);
+        }
+
+        // 6. Resize Handling
+        window.addEventListener('resize', () => {
+            cols = Math.floor(window.innerWidth * dpr / cellWidth);
+            rows = Math.floor(window.innerHeight * dpr / cellHeight);
+
+            asciiCanvas.width = cols * glyphWidth;
+            asciiCanvas.height = rows * glyphHeight;
+            asciiCanvas.style.width = `${(cols * cellWidth) / dpr}px`;
+            asciiCanvas.style.height = `${(rows * cellHeight) / dpr}px`;
+
+            sourceCanvas.width = cols;
+            sourceCanvas.height = rows;
+
+            if (glyphRenderer) {
+                glyphRenderer.resize(cols, rows);
+            }
+        });
+
+        init();
+    </script>
+</body>
+</html>

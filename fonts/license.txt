@@ -1,0 +1,9 @@
+
+Amstrad character set:
+https://commons.wikimedia.org/wiki/File:Amstrad_CPC_Full_AMSDOS_Character_Set.png
+
+
+The FontStruction “CP437 12x24”:
+(https://fontstruct.com/fontstructions/show/2737654) by “onetruetroy” is
+licensed under a Creative Commons Attribution Non-commercial Share Alike license
+(http://creativecommons.org/licenses/by-nc-sa/3.0/).

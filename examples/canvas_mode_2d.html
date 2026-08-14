@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GlyphWebGPU - Basic 2D p5.js Example</title>
+    <title>2D Canvas mode example</title>
     <style>
         * {
             box-sizing: border-box;
@@ -27,8 +27,8 @@
             display: none;
         }
     </style>
-    <script src="./p5.min.js"></script>
-    <script src="./glyphWebGPU.js"></script>
+    <script src="../thirdparty/p5.min.js"></script>
+    <script src="../glyphWebGPU.js"></script>
 </head>
 <body>
     <canvas id="sourceCanvas"></canvas>
@@ -63,7 +63,7 @@
             createCanvas(cols, rows, P2D, sourceCanvas);
 
             // Instantiate GlyphWebGPU engine
-            glyphRenderer = new GlyphWebGPU(sourceCanvas, asciiCanvas, cols, rows, 0);
+            glyphRenderer = new GlyphWebGPU(sourceCanvas, asciiCanvas, cols, rows, 0.0);
 
             // Define ASCII Character Map (256 entries mapping luminance 0..255 to character codes)
             const charMap = new Float32Array(256);
@@ -73,33 +73,22 @@
                 charMap[i] = ramp[rampIdx];
             }
 
-            // Define Foreground & Background Color Palettes (Interleaved RGBA float arrays 0..1)
-            const fgColors = new Float32Array(256 * 4);
+            // Background
             const bgColors = new Float32Array(256 * 4);
-
             for (let i = 0; i < 256; i++) {
-                const t = i / 255.0;
-                // Generative Cyan -> Magenta -> Gold Gradient
-                fgColors[i * 4 + 0] = Math.sin(t * Math.PI) * 0.9 + 0.1; // R
-                fgColors[i * 4 + 1] = (1.0 - t) * 0.8 + 0.2;            // G
-                fgColors[i * 4 + 2] = t * 0.9 + 0.1;                    // B
-                fgColors[i * 4 + 3] = 1.0;                              // A
-
-                // Dark Navy Background
-                bgColors[i * 4 + 0] = 0.02;
-                bgColors[i * 4 + 1] = 0.02;
-                bgColors[i * 4 + 2] = 0.05;
-                bgColors[i * 4 + 3] = 1.0;
+                bgColors[i * 4 + 0] = 0.0;
+                bgColors[i * 4 + 1] = 0.0;
+                bgColors[i * 4 + 2] = 0.0;
             }
 
-            // Upload Palettes to WebGPU Storage Buffers
-            glyphRenderer.setPalettes(charMap, fgColors, bgColors);
+            // Direct RGB Mode: pass null for fgColors so p5.js RGB colors directly colorize each glyph
+            glyphRenderer.setPalettes(charMap, null, bgColors);
 
             // Load Font Atlas PNG
             await glyphRenderer.loadGlyphsURL(
-                './Amstrad_CPC_Full_AMSDOS_Character_Set.png',
+                '../fonts/Amstrad_CPC_Full_AMSDOS_Character_Set.png',
                 128, 128, // Atlas width & height
-                8, 8      // Glyph width & height
+                glyphWidth, glyphHeight
             );
         }
 
@@ -108,23 +97,30 @@
             // Draw animated 2D generative graphics on offscreen source canvas
             background(0);
 
-            const t = millis() * 0.0012;
+            const t = millis() * 0.002;
             const centerX = cols / 2;
             const centerY = rows / 2;
             const maxRadius = Math.min(cols, rows) * 0.35;
 
             noStroke();
 
-            // Render orbiting morphing 2D circles
-            for (let i = 0; i < 6; i++) {
-                const angle = t * 1.2 + (i * Math.PI / 3);
-                const distance = Math.sin(t * 0.8 + i) * (maxRadius * 0.8);
+            // Render 3 orbiting circles with direct RGB colors
+            const circleColors = [
+                [255, 45, 45],   // Circle 1: Vivid Red
+                [45, 255, 65],   // Circle 2: Vivid Green
+                [45, 145, 255]   // Circle 3: Vivid Blue
+            ];
+            const numCircles = circleColors.length;
+
+            for (let i = 0; i < numCircles; i++) {
+                const angle = t * 1.1 + (i * (Math.PI * 2 / numCircles));
+                const distance = (0.55 + Math.sin(t * 0.7 + i * 2) * 0.25) * maxRadius;
                 const x = centerX + Math.cos(angle) * distance;
                 const y = centerY + Math.sin(angle) * distance;
-                const radius = 8 + Math.sin(t * 2 + i) * 8;
-
-                // Brightness gradient fills
-                fill(220 + i * 5);
+                const radius = 10 + Math.sin(t * 1.8 + i) * 4;
+                const c = circleColors[i];
+                
+                fill(c[0], c[1], c[2]);
                 ellipse(x, y, radius * 2, radius * 2);
             }
 
